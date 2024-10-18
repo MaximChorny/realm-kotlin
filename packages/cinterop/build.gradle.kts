@@ -518,7 +518,7 @@ fun Task.buildSharedLibrariesForJVMMacOs() {
                 "cmake",
                 *getSharedCMakeFlags(BuildType.RELEASE),
                 "-DCPACK_PACKAGE_DIRECTORY=..",
-                "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64",
+                "-DCMAKE_OSX_ARCHITECTURES=arm64",
                 project.file("src/jvm/")
             )
         }
@@ -590,7 +590,7 @@ fun Task.build_C_API_Macos_Universal(buildVariant: BuildType) {
                 "-DCMAKE_SYSTEM_NAME=Darwin",
                 "-DCPACK_SYSTEM_NAME=macosx",
                 "-DCPACK_PACKAGE_DIRECTORY=..",
-                "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64",
+                "-DCMAKE_OSX_ARCHITECTURES=arm64",
                 "-G",
                 "Xcode",
                 ".."

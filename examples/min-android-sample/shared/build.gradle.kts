@@ -13,6 +13,8 @@ kotlin {
     androidTarget()
 
     sourceSets {
+        val realmVersion = rootProject.ext["realmVersion"]
+        println("ForMax {rootProject.ext['realmVersion'] = $realmVersion")
         val commonMain by getting
         val commonTest by getting
         val androidMain by getting {

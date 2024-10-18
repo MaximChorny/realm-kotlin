@@ -56,6 +56,7 @@ tasks.register("publishCIPackages") {
     description = "Publish packages that has been configured for this CI node. See `gradle.properties`."
 
     // Figure out which targets are configured. This will impact which sub modules will be published
+
     val availableTargets = setOf(
         "iosArm64",
         "iosX64",

@@ -43,9 +43,9 @@ public interface RealmConfiguration : Configuration {
     public val deleteRealmIfMigrationNeeded: Boolean
 
     /**
-     * Flag forMAx
+     * Test forMAx
      */
-    public val forMax: Boolean
+    public val forMAx: Boolean
 
     /**
      * Used to create a [RealmConfiguration]. For common use cases, a [RealmConfiguration] can be
@@ -180,6 +180,7 @@ public interface RealmConfiguration : Configuration {
                 schemaVersion,
                 encryptionKey,
                 deleteRealmIfMigrationNeeded,
+                true,
                 compactOnLaunchCallback,
                 migration,
                 automaticEmbeddedObjectConstraintsResolution,

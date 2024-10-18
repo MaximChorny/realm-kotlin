@@ -39,6 +39,7 @@ internal class RealmConfigurationImpl(
     schemaVersion: Long,
     encryptionKey: ByteArray?,
     override val deleteRealmIfMigrationNeeded: Boolean,
+    override val forMAx: Boolean,
     compactOnLaunchCallback: CompactOnLaunchCallback?,
     migration: RealmMigration?,
     automaticBacklinkHandling: Boolean,

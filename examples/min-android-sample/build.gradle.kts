@@ -8,6 +8,7 @@ buildscript {
         }
 
     repositories {
+        println("ForMax rootProject.rootDir.absolutePath = ${rootProject.rootDir.absolutePath}")
         maven(url = "file://${rootProject.rootDir.absolutePath}/../../packages/build/m2-buildrepo")
         gradlePluginPortal()
         google()
