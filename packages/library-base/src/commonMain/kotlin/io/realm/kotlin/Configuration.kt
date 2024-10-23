@@ -182,18 +182,21 @@ public interface Configuration {
     // all function return types have to be typecast as [S].
     @Suppress("UnnecessaryAbstractClass", "UNCHECKED_CAST") // Actual implementations should rewire build() to companion map variant
     public abstract class SharedBuilder<T, S : SharedBuilder<T, S>>(
-        protected var schema: Set<KClass<out BaseRealmObject>> = setOf()
+        protected var schema: Set<KClass<out BaseRealmObject>> = setOf(),
+        needToVerifySchema:Boolean = false
     ) {
 
         init {
-            // Verify that the schema only contains subclasses of RealmObject and EmbeddedRealmObject
-            schema.forEach { clazz: KClass<out BaseRealmObject> ->
-                if (clazz.realmObjectCompanionOrNull() == null) {
-                    throw IllegalArgumentException(
-                        "Only subclasses of RealmObject and " +
-                            "EmbeddedRealmObject are allowed in the schema. Found: ${clazz.qualifiedName}. " +
-                            "If ${clazz.qualifiedName} is a valid subclass: $MISSING_PLUGIN_MESSAGE"
-                    )
+            if (needToVerifySchema) {
+                // Verify that the schema only contains subclasses of RealmObject and EmbeddedRealmObject
+                schema.forEach { clazz: KClass<out BaseRealmObject> ->
+                    if (clazz.realmObjectCompanionOrNull() == null) {
+                        throw IllegalArgumentException(
+                            "Only subclasses of RealmObject and " +
+                                    "EmbeddedRealmObject are allowed in the schema. Found: ${clazz.qualifiedName}. " +
+                                    "If ${clazz.qualifiedName} is a valid subclass: $MISSING_PLUGIN_MESSAGE"
+                        )
+                    }
                 }
             }
         }

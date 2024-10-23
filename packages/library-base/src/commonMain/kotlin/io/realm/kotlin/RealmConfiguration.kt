@@ -38,12 +38,12 @@ import kotlin.reflect.KClass
 public interface RealmConfiguration : Configuration {
     /**
      * Flag indicating whether the realm will be deleted if the schema has changed in a way that
-     * requires schema migration. forMAx
+     * requires schema migration.
      */
     public val deleteRealmIfMigrationNeeded: Boolean
 
     /**
-     * Test forMAx
+     * Test forMax 8. To check if version applied
      */
     public val forMAx: Boolean
 
