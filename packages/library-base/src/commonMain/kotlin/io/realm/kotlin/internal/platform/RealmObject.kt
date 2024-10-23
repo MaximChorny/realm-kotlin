@@ -34,3 +34,10 @@ internal expect fun <T : Any> realmObjectCompanionOrNull(clazz: KClass<T>): Real
 
 @PublishedApi
 internal expect fun <T : BaseRealmObject> realmObjectCompanionOrThrow(clazz: KClass<T>): RealmObjectCompanion
+
+/**
+ * Returns the [RealmObjectCompanion] associated with a given [BaseRealmObject]'s [KClass].
+ */
+
+@PublishedApi
+internal expect fun <T : BaseRealmObject> realmObjectCompanionCast(clazz: KClass<T>): RealmObjectCompanion

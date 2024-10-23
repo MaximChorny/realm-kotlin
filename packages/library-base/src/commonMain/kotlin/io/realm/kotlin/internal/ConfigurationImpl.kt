@@ -1,19 +1,3 @@
-/*
- * Copyright 2020 Realm Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package io.realm.kotlin.internal
 
 import io.realm.kotlin.CompactOnLaunchCallback
@@ -39,12 +23,17 @@ import io.realm.kotlin.internal.interop.use
 import io.realm.kotlin.internal.platform.PATH_SEPARATOR
 import io.realm.kotlin.internal.platform.appFilesDirectory
 import io.realm.kotlin.internal.platform.prepareRealmFilePath
+import io.realm.kotlin.internal.platform.realmObjectCompanionCast
 import io.realm.kotlin.internal.platform.realmObjectCompanionOrThrow
 import io.realm.kotlin.internal.util.CoroutineDispatcherFactory
+import io.realm.kotlin.internal.util.LazyCompanionMap
 import io.realm.kotlin.migration.AutomaticSchemaMigration
 import io.realm.kotlin.migration.RealmMigration
 import io.realm.kotlin.types.BaseRealmObject
 import kotlin.reflect.KClass
+import kotlin.time.Duration
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTime
 
 // TODO Public due to being accessed from `library-sync`
 @Suppress("LongParameterList")
@@ -83,7 +72,7 @@ public open class ConfigurationImpl(
     override val encryptionKey: ByteArray?
         get(): ByteArray? = userEncryptionKey
 
-    final override val mapOfKClassWithCompanion: Map<KClass<out BaseRealmObject>, RealmObjectCompanion>
+    final override val mapOfKClassWithCompanion: Map<KClass<out BaseRealmObject>, RealmObjectCompanion> = LazyCompanionMap(schema)
 
     final override val mediator: Mediator
 
@@ -131,7 +120,6 @@ public open class ConfigurationImpl(
         this.path = normalizePath(directory, name)
         this.name = name
         this.schema = schema
-        this.mapOfKClassWithCompanion = schema.associateWith { realmObjectCompanionOrThrow(it) }
         this.maxNumberOfActiveVersions = maxNumberOfActiveVersions
         this.notificationDispatcherFactory = notificationDispatcher
         this.writeDispatcherFactory = writeDispatcher
@@ -142,106 +130,142 @@ public open class ConfigurationImpl(
         this.inMemory = inMemory
         this.initialRealmFileConfiguration = initialRealmFileConfiguration
 
-        // We need to freeze `compactOnLaunchCallback` reference on initial thread for Kotlin Native
-        val compactCallback = compactOnLaunchCallback?.let { callback ->
-            object : io.realm.kotlin.internal.interop.CompactOnLaunchCallback {
-                override fun invoke(totalBytes: Long, usedBytes: Long): Boolean {
-                    return callback.shouldCompact(totalBytes, usedBytes)
+        // Start timing for compactCallback preparation
+        val compactCallbackTime: Duration = measureTime {
+            // Prepare compactCallback
+            val compactCallback = compactOnLaunchCallback?.let { callback ->
+                io.realm.kotlin.internal.interop.CompactOnLaunchCallback { totalBytes, usedBytes ->
+                    callback.shouldCompact(totalBytes, usedBytes)
                 }
             }
         }
+        println("forMAx compactCallback preparation time: ${compactCallbackTime.inWholeSeconds} seconds")
 
-        // We need to prepare the the migration callback so it can be frozen for Kotlin Native, but
-        // we cannot freeze it until it is actually used since it has a reference to this
-        // ConfigurationImpl,so freezing it now would make further initialization impossible.
-        val migrationCallback: MigrationCallback? = userMigration?.let { userMigration ->
-            when (userMigration) {
-                is AutomaticSchemaMigration -> MigrationCallback { oldRealm: FrozenRealmPointer, newRealm: LiveRealmPointer, schema: RealmSchemaPointer ->
-                    // If we don't start a read, then we cannot read the version
-                    RealmInterop.realm_begin_read(oldRealm)
-                    RealmInterop.realm_begin_read(newRealm)
-                    val old = DynamicRealmImpl(this@ConfigurationImpl, oldRealm)
-                    val new = DynamicMutableRealmImpl(this@ConfigurationImpl, newRealm)
-                    userMigration.migrate(object : AutomaticSchemaMigration.MigrationContext {
-                        override val oldRealm: DynamicRealm = old
-                        override val newRealm: DynamicMutableRealm = new
-                    })
-                }
-            }
-        }
-
-        // Verify schema invariants that cannot be captured at compile time nor by Core.
-        // For now, the only invariant we capture here is wrong use of @PersistedName on classes
-        // which might accidentally create multiple model classes with the same name.
-        val duplicates: Set<String> = mapOfKClassWithCompanion.values
-            .map { it.`io_realm_kotlin_schema`().name }
-            .groupingBy { it }
-            .eachCount()
-            .filter { it.value > 1 }
-            .keys
-        if (duplicates.isNotEmpty()) {
-            throw IllegalArgumentException("The schema has declared the following class names multiple times: ${duplicates.joinToString()}")
-        }
-
-        // Invariant: All native modifications should happen inside this initializer, as that
-        // wil allow us to construct multiple Config objects in Core that all can be used to open
-        // the same Realm.
-        this.configInitializer = { nativeConfig: RealmConfigurationPointer ->
-            RealmInterop.realm_config_set_path(nativeConfig, this.path)
-            RealmInterop.realm_config_set_schema_mode(nativeConfig, schemaMode)
-            RealmInterop.realm_config_set_schema_version(config = nativeConfig, version = schemaVersion)
-
-            compactCallback?.let { callback ->
-                RealmInterop.realm_config_set_should_compact_on_launch_function(
-                    nativeConfig,
-                    callback
-                )
-            }
-
-            val nativeSchema = RealmInterop.realm_schema_new(
-                mapOfKClassWithCompanion.values.map {
-                    it.`io_realm_kotlin_schema`().let {
-                        // Core needs to process the properties in a particular order:
-                        // first the real properties and then the computed ones
-                        it.cinteropClass to it.cinteropProperties.sortedBy { it.isComputed }
+        // Start timing for migrationCallback preparation
+        val migrationCallbackTime: Duration = measureTime {
+            // Prepare migrationCallback
+            val migrationCallback: MigrationCallback? = userMigration?.let { userMigration ->
+                when (userMigration) {
+                    is AutomaticSchemaMigration -> MigrationCallback { oldRealm: FrozenRealmPointer, newRealm: LiveRealmPointer, schema: RealmSchemaPointer ->
+                        // If we don't start a read, then we cannot read the version
+                        RealmInterop.realm_begin_read(oldRealm)
+                        RealmInterop.realm_begin_read(newRealm)
+                        val old = DynamicRealmImpl(this@ConfigurationImpl, oldRealm)
+                        val new = DynamicMutableRealmImpl(this@ConfigurationImpl, newRealm)
+                        userMigration.migrate(object : AutomaticSchemaMigration.MigrationContext {
+                            override val oldRealm: DynamicRealm = old
+                            override val newRealm: DynamicMutableRealm = new
+                        })
                     }
                 }
-            )
-
-            RealmInterop.realm_config_set_schema(nativeConfig, nativeSchema)
-            RealmInterop.realm_config_set_max_number_of_active_versions(
-                nativeConfig,
-                maxNumberOfActiveVersions
-            )
-
-            migrationCallback?.let {
-                RealmInterop.realm_config_set_migration_function(nativeConfig, it)
             }
-            RealmInterop.realm_config_set_automatic_backlink_handling(nativeConfig, automaticBacklinkHandling)
-
-            userEncryptionKey?.let { key: ByteArray ->
-                RealmInterop.realm_config_set_encryption_key(nativeConfig, key)
-            }
-
-            RealmInterop.realm_config_set_in_memory(nativeConfig, inMemory)
-
-            nativeConfig
         }
+        println("forMAx migrationCallback preparation time: ${migrationCallbackTime.inWholeSeconds} seconds")
 
-        mediator = object : Mediator {
-            override fun createInstanceOf(clazz: KClass<out BaseRealmObject>): RealmObjectInternal =
-                when (clazz) {
-                    DynamicRealmObject::class -> DynamicRealmObjectImpl()
-                    DynamicMutableRealmObject::class -> DynamicMutableRealmObjectImpl()
-                    DynamicUnmanagedRealmObject::class -> DynamicMutableRealmObjectImpl()
-                    else ->
-                        companionOf(clazz).`io_realm_kotlin_newInstance`() as RealmObjectInternal
+        // Start timing for configInitializer setup
+        val configInitializerSetupTime: Duration = measureTime {
+            // Set up configInitializer
+            this.configInitializer = { nativeConfig: RealmConfigurationPointer ->
+                val configInitTime: Duration = measureTime {
+                    RealmInterop.realm_config_set_path(nativeConfig, this.path)
+                    RealmInterop.realm_config_set_schema_mode(nativeConfig, schemaMode)
+                    RealmInterop.realm_config_set_schema_version(
+                        config = nativeConfig,
+                        version = schemaVersion
+                    )
+
+                    compactOnLaunchCallback?.let { callback ->
+                        RealmInterop.realm_config_set_should_compact_on_launch_function(
+                            nativeConfig,
+                            io.realm.kotlin.internal.interop.CompactOnLaunchCallback { totalBytes, usedBytes ->
+                                callback.shouldCompact(totalBytes, usedBytes)
+                            }
+                        )
+                    }
+
+                    // Start timing for nativeSchema creation
+                    val nativeSchemaCreationTime: Duration = measureTime {
+                        val seenNames = mutableSetOf<String>()
+                        val duplicates = mutableSetOf<String>()
+                        val schemaList = mapOfKClassWithCompanion.values.map { companion ->
+                            companion.`io_realm_kotlin_schema`().let { schema ->
+                                val className = schema.name
+
+                                if (!seenNames.add(className)) {
+                                    duplicates.add(className)
+                                }
+
+                                schema.cinteropClass to schema.cinteropProperties.sortedBy { it.isComputed }
+                            }
+                        }
+
+                        if (duplicates.isNotEmpty()) {
+                            throw IllegalArgumentException("The schema has declared the following class names multiple times: ${duplicates.joinToString()}")
+                        }
+                        (mapOfKClassWithCompanion as LazyCompanionMap).printTimingStats()
+                        val nativeSchema = RealmInterop.realm_schema_new(schemaList)
+                        RealmInterop.realm_config_set_schema(nativeConfig, nativeSchema)
+                    }
+                    println("forMAx nativeSchema creation time: ${nativeSchemaCreationTime.inWholeSeconds} seconds")
+
+                    RealmInterop.realm_config_set_max_number_of_active_versions(
+                        nativeConfig,
+                        maxNumberOfActiveVersions
+                    )
+
+                    userMigration?.let { userMigration ->
+                        val migrationCallback = when (userMigration) {
+                            is AutomaticSchemaMigration -> MigrationCallback { oldRealm: FrozenRealmPointer, newRealm: LiveRealmPointer, schema: RealmSchemaPointer ->
+                                // If we don't start a read, then we cannot read the version
+                                RealmInterop.realm_begin_read(oldRealm)
+                                RealmInterop.realm_begin_read(newRealm)
+                                val old = DynamicRealmImpl(this@ConfigurationImpl, oldRealm)
+                                val new = DynamicMutableRealmImpl(this@ConfigurationImpl, newRealm)
+                                userMigration.migrate(object : AutomaticSchemaMigration.MigrationContext {
+                                    override val oldRealm: DynamicRealm = old
+                                    override val newRealm: DynamicMutableRealm = new
+                                })
+                            }
+                        }
+                        RealmInterop.realm_config_set_migration_function(nativeConfig, migrationCallback)
+                    }
+
+                    RealmInterop.realm_config_set_automatic_backlink_handling(
+                        nativeConfig,
+                        automaticBacklinkHandling
+                    )
+
+                    userEncryptionKey?.let { key: ByteArray ->
+                        RealmInterop.realm_config_set_encryption_key(nativeConfig, key)
+                    }
+
+                    RealmInterop.realm_config_set_in_memory(nativeConfig, inMemory)
                 }
+                println("forMAx configInitializer total time: ${configInitTime.inWholeSeconds} seconds")
 
-            override fun companionOf(clazz: KClass<out BaseRealmObject>): RealmObjectCompanion =
-                mapOfKClassWithCompanion[clazz]
-                    ?: error("$clazz not part of this configuration schema")
+                nativeConfig
+            }
         }
+        println("forMAx configInitializer setup time: ${configInitializerSetupTime.inWholeSeconds} seconds")
+
+        // Start timing for mediator setup
+        val mediatorSetupTime: Duration = measureTime {
+            mediator = object : Mediator {
+                override fun createInstanceOf(clazz: KClass<out BaseRealmObject>): RealmObjectInternal =
+                    when (clazz) {
+                        DynamicRealmObject::class -> DynamicRealmObjectImpl()
+                        DynamicMutableRealmObject::class -> DynamicMutableRealmObjectImpl()
+                        DynamicUnmanagedRealmObject::class -> DynamicMutableRealmObjectImpl()
+                        else ->
+                            companionOf(clazz).`io_realm_kotlin_newInstance`() as RealmObjectInternal
+                    }
+
+                override fun companionOf(clazz: KClass<out BaseRealmObject>): RealmObjectCompanion =
+                    mapOfKClassWithCompanion[clazz]
+                        ?: error("$clazz not part of this configuration schema")
+            }
+        }
+        println("forMAx mediator setup time: ${mediatorSetupTime.inWholeSeconds} seconds")
     }
 
     private fun normalizePath(directoryPath: String, fileName: String): String {
